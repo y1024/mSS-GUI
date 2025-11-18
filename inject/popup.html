@@ -1,0 +1,154 @@
+<!-- 浮动按钮 -->
+<button id="routerBtn" style="position:fixed; top:20px; right:20px; width:50px; height:50px; background:#42b983; color:white; border-radius:50%; display:flex; align-items:center; justify-content:center; cursor:pointer; box-shadow:0 2px 10px rgba(0,0,0,0.2); z-index:99999999; font-size:24px; border:none; outline:none;">📊</button>
+
+<!-- 路由面板 -->
+<div id="routerPanel" style="position:fixed; top:0; right:-400px; width:400px; height:100vh; background:#fff; box-shadow:-5px 0 15px rgba(0,0,0,0.05); z-index:99999998; transition:right 0.3s ease; overflow-y:auto; font-family:-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;">
+  <!-- 面板内容将通过JS动态生成 -->
+</div>
+
+<script>
+        // 获取路由实例
+    function router() {
+        // 初始化全局变量
+        if (!window.__mss__) window.__mss__ = {};
+        if (!window.__mss__.proxyhook) window.__mss__.proxyhook = {};
+        if(document.querySelector("#app").__vue__){
+            //vue 2
+            window.__mss__.proxyhook.router=document.querySelector("#app").__vue__.$router;
+        }else{
+            //vue 3
+            window.__mss__.proxyhook.router=document.querySelector("#app").__vue_app__.config.globalProperties.$router;
+        }
+        return window.__mss__.proxyhook.router;
+    }
+
+
+    // 我说粑粑还是得人吃 这时候der包开始装死
+    function turtle(node,re,rpath=""){ //递归 
+        //写得头疼讨厌死了
+        if(node.children===undefined|| node.children===null||node.children.length==0){
+            re.push(rpath+node.path);
+            return; //当没有子节点的时候返回
+        } 
+        node.children.forEach(c=>{
+            turtle(c,re,rpath+node.path); //对所有子节点调用
+        })
+    }
+
+
+    // DOM元素
+    const btn = document.getElementById('routerBtn');
+    const panel = document.getElementById('routerPanel');
+
+    let lastPathList = [];
+    let refreshIntervalId = null;
+
+    // 切换面板
+    btn.addEventListener('click', () => {
+        const isOpen = panel.style.right === '0px';
+        if (isOpen) {
+            panel.style.right = '-400px';
+            if (refreshIntervalId) {
+                clearInterval(refreshIntervalId);
+                refreshIntervalId = null;
+            }
+        } else {
+            panel.style.right = '0px';
+            fetchAndUpdateRoutes();
+            if (!refreshIntervalId) {
+                refreshIntervalId = setInterval(fetchAndUpdateRoutes, 1000);
+            }
+        }
+    });
+
+    // 获取并更新路由
+    function fetchAndUpdateRoutes() {
+        try {
+            const r = router();
+            if (!r || !r.getRoutes) {
+                if (panel.innerHTML !== '<div style="padding:20px; color:#999; text-align:center;">未获取到路由实例</div>') {
+                    panel.innerHTML = '<div style="padding:20px; color:#999; text-align:center;">未获取到路由实例</div>';
+                }
+                return;
+            }
+
+            const routes = r.getRoutes();
+            const pathList = [];
+            routes.forEach(route => turtle(route, pathList));
+
+            if (arraysAreEqual(pathList, lastPathList)) {
+                return;
+            }
+
+            renderRouterList(pathList);
+            lastPathList = [...pathList];
+
+        } catch (e) {
+            console.error("加载路由失败：", e);
+            if (panel.innerHTML !== '<div style="padding:20px; color:#ff6b6b; text-align:center;">加载失败</div>') {
+                panel.innerHTML = '<div style="padding:20px; color:#ff6b6b; text-align:center;">加载失败</div>';
+            }
+        }
+    }
+
+    // 比较数组是否相同
+    function arraysAreEqual(a, b) {
+        if (a.length !== b.length) return false;
+        for (let i = 0; i < a.length; i++) {
+            if (a[i] !== b[i]) return false;
+        }
+        return true;
+    }
+    
+    // 渲染路由列表 UI
+    function renderRouterList(pathList) {
+        // 优化：头部样式
+        let html = '<div style="padding:15px 20px; background:#f8f8f8; border-bottom:1px solid #eee; display:flex; justify-content:space-between; align-items:center; position:sticky; top:0;">';
+        html += '<strong style="font-size:16px; color:#333;">路由列表</strong>';
+        html += '<span id="closeBtn" style="cursor:pointer; font-size:20px; color:#999; transition: color 0.2s;">×</span>';
+        html += '</div>';
+
+        if (pathList.length === 0) {
+            // 优化：空状态样式
+            html += '<div style="padding:40px 20px; color:#999; text-align:center;">暂无路由数据</div>';
+        } else {
+            pathList.forEach(path => {
+                // 优化：路由项样式
+                html += `<div class="router-item" style="padding:14px 20px; border-bottom:1px solid #eee; cursor:pointer; transition: all 0.2s; font-size:16px; color:#555; font-weight:500;">${path}</div>`;
+            });
+        }
+
+        panel.innerHTML = html;
+        
+        // 为每个路由项添加 hover 事件
+        document.querySelectorAll('.router-item').forEach(item => {
+            item.addEventListener('mouseenter', () => {
+                item.style.backgroundColor = '#f0f0f0';
+                item.style.color = '#333';
+            });
+            item.addEventListener('mouseleave', () => {
+                item.style.backgroundColor = 'transparent';
+                item.style.color = '#555';
+            });
+            item.addEventListener('click', () => {
+                navigateTo(item.textContent);
+            });
+        });
+
+        document.getElementById('closeBtn').addEventListener('click', () => {
+            panel.style.right = '-400px';
+            if (refreshIntervalId) {
+                clearInterval(refreshIntervalId);
+                refreshIntervalId = null;
+            }
+        });
+    }
+
+    // 导航函数
+    function navigateTo(path) {
+        const r = router();
+        if (r && r.push) {
+            r.push(path);
+        }
+    }
+</script>

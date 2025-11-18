@@ -7,13 +7,21 @@ import requests
 from mitmproxy import http
 from etc.jsast import AST
 import esprima
-from esprima.visitor import Visited
+from esprima.visitor import Visited,Visitor
 from esprima.nodes import *
 import etc.__escodegen as escodegen
 from mi.mi_gui import Ctx_gui
+import json
+from mi.mi_monkey import Ctx_monkey,MONKEYSCRIPT
+
+
 
 
 class Ctx_forcejs(Ctx_base):
+
+    @classmethod
+    def is_webpack(cls,flow:HTTPFlow):
+        return flow.request.url.endswith(".js") and not "vendor" in flow.request.url and flow.response.status_code==200 # 跳过lib
 
     def __init__(self):
         super().__init__([RR.RESPONSE])
@@ -47,13 +55,91 @@ class Ctx_url(Ctx_base):
         super().__init__([RR.RESPONSE])
 
 # 路由强制注册 一想到哪一天我被整破防了换js这些都要重写我就想321
+# 这应该是最长的函数
 
-class Ctx_router(Ctx_base):
+class Ctx_router(Ctx_chainboot):
+
+    vue={}
+
+    def __init__(self):
+        super().__init__([RR.REQUEST,RR.RESPONSE], [
+            Ctx_monkey([["proxy-router.js",MONKEYSCRIPT.OUTSIDE]]), # 注入router
+            Ctx_forcejs(), # 强制加载js
+            Ctx_proxypack(), # 暴露变量
+            ]) 
 
     class __ast(AST):
 
+        class ___ast(Visitor): # 你py连匿名类都不好写 esprima python到底为什么会这样写啊 这见鬼了
+            def visit_CallExpression(self,node): 
+                if isinstance(node.callee,StaticMemberExpression) and node.callee.property.name=="bind":
+                    # 用了加载器 这里找一下webpack_require
+                    node.callee.object.name="__mss_webpack_require__"
+                if isinstance(node.callee,StaticMemberExpression) and node.callee.property.name!="bind" and node.callee.object.name=="__mss_webpack_require__" :
+                    Ctx_router.vue[self.key]["loader"]=node.callee.property.name # 累死个人
+                result = yield Visited(node.__dict__)
+                yield result  # 不支持写一起 也很幽默
+
+        def __init__(self, js,key):
+            self.key=key
+            super().__init__(js)  
+
+        def visit_ObjectExpression(self,node):
+
         def visit_ArrayExpression(self,node):
-            pass
+            if(len(node.elements)>0): 
+                for i in node.elements:
+                    if not isinstance(i,ObjectExpression):
+                        return
+                    ispath=False
+                    iscomponent=False # 有时候不知道我在写什么
+                    if "path" in i.properties and ("component" in i.properties or "components" in i.properties):
+                        if not "loader" in Ctx_router.vue[self.key]:
+                            # 没有loader 读取一个
+                            ___=Ctx_router.__ast.___ast()
+                            ___.visit(_.key.value)
+                            _.key.value=___.visit(_.key.value) # 就这样折磨所有人~
+                    for _ in i.properties:
+                        if _.key.name=="path":
+                            ispath=True
+                        if "component" in _.key.name:
+                            iscomponent=True
+                            if not "loader" in Ctx_router.vue[self.key]:
+                                # 没有loader 读取一个
+                                ___=Ctx_router.__ast.___ast()
+                                ___.visit(_.key.value)
+                                _.key.value=___.visit(_.key.value) # 就这样折磨所有人~
+                    if not (ispath and iscomponent):
+                        return
+            # 检查每个成员的类型 成员的构成 符合就保存
+                Ctx_router.vue[self.key]["router"].append(escodegen.generate(node))
+            result = yield Visited(node.__dict__)
+            yield result  # 不支持写一起 也很幽默
+
+    def request(self, flow):
+        if not super().request(flow):
+            return
+        if flow.request.path.endswith("/:ctx_routers"):
+            print(Ctx_router.vue.get(flow.request.host, []))
+            flow.response = http.Response.make(
+                200,
+                json.dumps(Ctx_router.vue.get(flow.request.host, [])).encode("utf-8"),
+                {"Content-Type": "application/json"}
+            )
+        return True
+
+            
+    def response(self, flow):
+        if not super().response(flow): return
+        if not Ctx_forcejs.is_webpack(flow): return
+        if not flow.request.host in Ctx_router.vue.keys():Ctx_router.vue[flow.request.host]={"router":[]} # 初始化
+        content = Ctx_base.autocode(flow.response, flow.response.raw_content)
+        print(flow.request.url)
+        Ctx_router.__ast(content,flow.request.host) # 这里只查看不修改
+        return True
+
+
+    
 
 # proxy app下变量和函数到window下
 
@@ -75,22 +161,27 @@ class Ctx_proxypack(Ctx_base):
             # 芝能自己来惹
             newnodes=[]
             newnodes.append(esprima.parseScript(f"window.__mss__={{}}")) #先初始化 你语言还有这事呢？
-            for node in self.code.body[0].expression.callee.body.body: # 谁能念出来
-                #遍历所有语句，对子一级节点的VariableDeclaration 和 FunctionDeclaration上proxy
-                if isinstance(node,VariableDeclaration):
-                    for i in node.declarations: #这里偷点懒 应该没事 有事再改
-                        # 调的我也是快升天了
-                        newnodes.append(esprima.parseScript(self.proxyjsvar.format(i.id.name,escodegen.generate(i.init))).body[0])
-                        newnodes.append(esprima.parseScript(f"{i.id.name}={escodegen.generate(i.init)};"))
-                elif isinstance(node,FunctionDeclaration):
-                    if len(node.params)<2: # 拦截1 和0参数的函数 # 过滤条件不必要
+            if(len(self.code.body)==1): # 修正一下use strict的情况
+                for node in self.code.body[0].expression.callee.body.body: # 谁能念出来 
+                    #遍历所有语句，对子一级节点的VariableDeclaration 和 FunctionDeclaration上proxy
+                    if isinstance(node,VariableDeclaration):
+                        for i in node.declarations: #这里偷点懒 应该没事 有事再改
+                            # 调的我也是快升天了
+                            newnodes.append(esprima.parseScript(self.proxyjsvar.format(i.id.name,escodegen.generate(i.init))).body[0])
+                            newnodes.append(esprima.parseScript(f"{i.id.name}={escodegen.generate(i.init)};"))
+                    elif isinstance(node,FunctionDeclaration):
+                        if len(node.params)<2: # 拦截1 和0参数的函数 # 过滤条件不必要
+                            newnodes.append(node)
+                            newnodes.append(esprima.parseScript(f"window.__mss__.{node.id.name}={node.id.name};"))
+                        else:
+                            newnodes.append(node)
+                    elif isinstance(node,ExpressionStatement):
+                        # 拦截 表达式，这里主要是拦截一下router
+                        ## vue2 routes: vue3 history:  写累了之后写吧 
                         newnodes.append(node)
-                        newnodes.append(esprima.parseScript(f"window.__mss__.{node.id.name}={node.id.name};"))
                     else:
                         newnodes.append(node)
-                else:
-                    newnodes.append(node)
-            self.code.body[0].expression.callee.body.body=newnodes
+                self.code.body[0].expression.callee.body.body=newnodes
             return self.code
         
     def response(self, flow):

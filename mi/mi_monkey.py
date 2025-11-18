@@ -61,3 +61,26 @@ class Ctx_monkey(Ctx_base):
                         hroot.append(_)
             flow.response.text=etree.tostring(ht,encoding="utf8",pretty_print=True,method="html").decode("utf8")
         return True
+    
+
+class Ctx_inject(Ctx_base):
+
+    def __init__(self,inject):
+        super().__init__([RR.RESPONSE])
+        self.inject=inject
+
+    def response(self, flow):
+        if not super().response(flow):
+            return
+        if "text/html" in flow.response.headers.get("content-type", ""):
+            ht = etree.HTML(Ctx_base.autocode(flow.response, flow.response.raw_content))
+            body = ht.xpath("//body")
+            if body:
+                try:
+                    with open(f"inject/{self.inject}", "r", encoding="utf8") as f:
+                        for c in reversed(etree.fromstring(f"<html>{f.read()}</html>", parser=etree.HTMLParser()).getchildren()):
+                            body[0].insert(0, c)
+                except Exception as e:
+                    Ctx_gui.logger(f"注入失败: {e}")
+            flow.response.text = etree.tostring(ht, encoding="utf8", method="html").decode("utf8")
+        return True
