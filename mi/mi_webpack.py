@@ -15,13 +15,23 @@ import json
 from mi.mi_monkey import Ctx_monkey,MONKEYSCRIPT
 
 
-
-
-class Ctx_forcejs(Ctx_base):
+class Ctx_dealwebpack(Ctx_base):
 
     @classmethod
     def is_webpack(cls,flow:HTTPFlow):
-        return flow.request.url.endswith(".js") and not "vendor" in flow.request.url and flow.response.status_code==200 # 跳过lib
+        return flow.request.url.endswith(".js") and not "vendor" in flow.request.url and re.search("^(.+)\.([0-9a-f]+)\.js$",flow.request.url) and flow.response.status_code==200 # 跳过lib
+
+    def request(self, flow):
+        if not super().request(flow) or not Ctx_dealwebpack.is_webpack(flow): return False
+    
+    def response(self, flow):
+        if not super().response(flow) or not Ctx_dealwebpack.is_webpack(flow): return False
+
+
+
+
+class Ctx_forcejs(Ctx_dealwebpack):
+
 
     def __init__(self):
         super().__init__([RR.RESPONSE])
@@ -49,7 +59,7 @@ class Ctx_forcejs(Ctx_base):
 
 
 # 根据js响应提取API
-class Ctx_url(Ctx_base):
+class Ctx_url(Ctx_dealwebpack):
 
     def __init__(self):
         super().__init__([RR.RESPONSE])
@@ -67,51 +77,50 @@ class Ctx_router(Ctx_chainboot):
             Ctx_forcejs(), # 强制加载js
             Ctx_proxypack(), # 暴露变量
             ]) 
+        
+    
+    class abc(Visitor): # 你py连匿名类都不好写 esprima python到底为什么会这样写啊 这见鬼了
 
-    class __ast(AST):
-
-        class ___ast(Visitor): # 你py连匿名类都不好写 esprima python到底为什么会这样写啊 这见鬼了
-            def visit_CallExpression(self,node): 
-                if isinstance(node.callee,StaticMemberExpression) and node.callee.property.name=="bind":
+        REQUIRE=None
+        def visit_CallExpression(self,node): 
+            if Ctx_router.abc.REQUIRE==None:
+                if isinstance(node.callee,StaticMemberExpression) and (node.callee.property.name=="bind" or node.callee.property.name=="e"):
                     # 用了加载器 这里找一下webpack_require
-                    node.callee.object.name="__mss_webpack_require__"
-                if isinstance(node.callee,StaticMemberExpression) and node.callee.property.name!="bind" and node.callee.object.name=="__mss_webpack_require__" :
-                    Ctx_router.vue[self.key]["loader"]=node.callee.property.name # 累死个人
-                result = yield Visited(node.__dict__)
-                yield result  # 不支持写一起 也很幽默
+                    Ctx_router.abc.REQUIRE=node.callee.object.name
+            result = yield Visited(node.__dict__)
+            yield result  # 不支持写一起 也很幽默
+        
+        def visit_Identifier(self, node):
+            if node.name==Ctx_router.abc.REQUIRE:
+                node.name="__mss_webpack_require__"
+            result = yield Visited(node.__dict__)
+            yield result
+
+        
+        def exec(self,code):
+            self.visit(code)
+            re=self.visit(code)
+            Ctx_router.abc.REQUIRE=None # 复位
+            return re
+
+    class anon_ast(AST):
 
         def __init__(self, js,key):
             self.key=key
             super().__init__(js)  
 
         def visit_ObjectExpression(self,node):
-
-        def visit_ArrayExpression(self,node):
-            if(len(node.elements)>0): 
-                for i in node.elements:
-                    if not isinstance(i,ObjectExpression):
-                        return
-                    ispath=False
-                    iscomponent=False # 有时候不知道我在写什么
-                    if "path" in i.properties and ("component" in i.properties or "components" in i.properties):
-                        if not "loader" in Ctx_router.vue[self.key]:
-                            # 没有loader 读取一个
-                            ___=Ctx_router.__ast.___ast()
-                            ___.visit(_.key.value)
-                            _.key.value=___.visit(_.key.value) # 就这样折磨所有人~
-                    for _ in i.properties:
-                        if _.key.name=="path":
-                            ispath=True
-                        if "component" in _.key.name:
-                            iscomponent=True
-                            if not "loader" in Ctx_router.vue[self.key]:
-                                # 没有loader 读取一个
-                                ___=Ctx_router.__ast.___ast()
-                                ___.visit(_.key.value)
-                                _.key.value=___.visit(_.key.value) # 就这样折磨所有人~
-                    if not (ispath and iscomponent):
-                        return
-            # 检查每个成员的类型 成员的构成 符合就保存
+            ispath=False
+            iscomponent=False
+            for _ in node.properties:
+                if not _.key.name: continue # 你语言还有name和value的区别 谁学了谁疯
+                if _.key.name=="path":
+                    ispath=True
+                if "component" in _.key.name:
+                    iscomponent=True
+            if (ispath and iscomponent): 
+                node=Ctx_router.abc().exec(node)# 就这样折磨所有人~                
+                # 检查每个成员的类型 成员的构成 符合就保存
                 Ctx_router.vue[self.key]["router"].append(escodegen.generate(node))
             result = yield Visited(node.__dict__)
             yield result  # 不支持写一起 也很幽默
@@ -120,7 +129,6 @@ class Ctx_router(Ctx_chainboot):
         if not super().request(flow):
             return
         if flow.request.path.endswith("/:ctx_routers"):
-            print(Ctx_router.vue.get(flow.request.host, []))
             flow.response = http.Response.make(
                 200,
                 json.dumps(Ctx_router.vue.get(flow.request.host, [])).encode("utf-8"),
@@ -131,24 +139,23 @@ class Ctx_router(Ctx_chainboot):
             
     def response(self, flow):
         if not super().response(flow): return
-        if not Ctx_forcejs.is_webpack(flow): return
         if not flow.request.host in Ctx_router.vue.keys():Ctx_router.vue[flow.request.host]={"router":[]} # 初始化
         content = Ctx_base.autocode(flow.response, flow.response.raw_content)
-        print(flow.request.url)
-        Ctx_router.__ast(content,flow.request.host) # 这里只查看不修改
+        Ctx_router.anon_ast(content,flow.request.host) # 这里只查看不修改
         return True
 
 
     
 
 # proxy app下变量和函数到window下
+# 适用于webpack5以下 不开启ESModule导出模式 目前绝大多数webpack不会用这个模式
 
-class Ctx_proxypack(Ctx_base):
+class Ctx_proxypack(Ctx_dealwebpack):
 
     def __init__(self):
         super().__init__([RR.RESPONSE])
 
-    class __ast(AST):
+    class anon_ast(AST):
 
         def __init__(self, js): # _apphex 
             with open("monkey/proxy-var.js","r",encoding="utf8") as f:
@@ -187,18 +194,16 @@ class Ctx_proxypack(Ctx_base):
     def response(self, flow):
         if not super().response(flow):
             return
-        content = Ctx_base.autocode(flow.response, flow.response.raw_content)
-        if flow.request.url.endswith(".js") and "app" in flow.request.url: # 先这么写  后面改
-            flow.response.set_content(
-                Ctx_proxypack.__ast(content).jsafter.encode("utf8")
-            )
+        flow.response.set_content(
+            Ctx_proxypack.anon_ast(Ctx_base.autocode(flow.response, flow.response.raw_content)).jsafter.encode("utf8")
+        )
 
 
 # 去除guard
 
-class Ctx_antiguard(Ctx_base):
+class Ctx_antiguard(Ctx_dealwebpack):
 
-    class __ast(AST):
+    class anon_ast(AST):
 
         def __init__(self,js:str,anti:list):
             self.anti=anti
@@ -244,17 +249,15 @@ class Ctx_antiguard(Ctx_base):
     def response(self, flow):
         if not super().response(flow):
             return
-        content = Ctx_base.autocode(flow.response, flow.response.raw_content)
-        if flow.request.url.endswith(".js"):
-            flow.response.set_content(
-                Ctx_antiguard.__ast(content,self.anti).jsafter.encode("utf8")
-            )
+        flow.response.set_content(
+            Ctx_antiguard.anon_ast(Ctx_base.autocode(flow.response, flow.response.raw_content),self.anti).jsafter.encode("utf8")
+        )
 
 
 # 优化未开启作用域提升情况下的代码
-class Ctx_packeaziler(Ctx_base):
+class Ctx_packeaziler(Ctx_dealwebpack):
 
-    class __ast(AST):
+    class anon_ast(AST):
 
         def visit_FunctionExpression(
             self, node
@@ -282,11 +285,10 @@ class Ctx_packeaziler(Ctx_base):
             return
         content = Ctx_base.autocode(flow.response, flow.response.raw_content)
         # 这种特征其实还不是很明晰 先就这么写 有问题直接私聊我 这缩进真sb
-        if flow.request.url.endswith(".js"):
-            if (
-                len(re.findall(r"[\/][\*]{2,}[\/]", content)) > 5
-                and "/*! exports provided: default */" in content
-            ):
-                flow.response.set_content(
-                    Ctx_packeaziler.__ast(content).jsafter.encode("utf8")
-                )
+        if (
+            len(re.findall(r"[\/][\*]{2,}[\/]", content)) > 5
+            and "/*! exports provided: default */" in content
+        ):
+            flow.response.set_content(
+                Ctx_packeaziler.anon_ast(content).jsafter.encode("utf8")
+            )
