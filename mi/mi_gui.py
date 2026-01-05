@@ -39,8 +39,7 @@ class Ctx_gui(Ctx_global):
     def __init__(self):
         self.log = []  # 日志
         super().__init__([RR.REQUEST])
-        self.token = os.urandom(
-            6).hex() if TOKEN == "" else TOKEN  # 不是同一个时间但是同一个三目这一块
+        self.token = os.urandom(6).hex() if TOKEN == "" else TOKEN  # 不是同一个时间但是同一个三目这一块
         print("当前token为："+self.token)
 
     def request(self, flow):
@@ -48,7 +47,7 @@ class Ctx_gui(Ctx_global):
         if (flow.request.headers.get("Host") if flow.request.headers.get("Host") else flow.request.host) not in ["mss.local"]:
             return  # console的路径为mss.local/console.mss
         if flow.request.path.endswith("console.mss"):  # console就不添加了
-            with open("console.html", "r", encoding="utf-8") as c:
+            with open("inject/console.html", "r", encoding="utf-8") as c:
                 flow.response = http.Response.make(200, Template(c.read()).render(g=GLOBAL.all(), addons_head=Ctx_gui.get_addons_head()).encode("utf-8"), {"Content-Type": "text/html; charset=utf-8"})
         if flow.request.path.endswith("log.mss"):
             flow.response = http.Response.make(200, Ctx_gui.log.encode(

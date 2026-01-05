@@ -112,6 +112,25 @@ class Ctx_base(ABC):
                     return fnmatch(flow.request.host,GLOBAL.get("全局范围"))
         return True
 
+# 链式启动 也就是带嵌套的插件
+class Ctx_chainboot(Ctx_base):
+
+    def __init__(self, rr=[RR.REQUEST, RR.RESPONSE], chain:list[Ctx_base]=[]):
+        super().__init__(rr)
+        self.chain=chain 
+
+    def request(self, flow):
+        if not super().request(flow): return
+        for i in self.chain:
+            i.request(flow)
+        return True
+    
+    def response(self, flow):
+        if not super().response(flow): return
+        for i in self.chain:
+            i.response(flow)
+        return True
+
 class Ctx_hit_base(Ctx_base,ABC): 
     
     def __init__(self,regex,rr):
